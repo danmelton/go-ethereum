@@ -24,7 +24,8 @@ Usage: go run ci.go <command> <command flags/arguments>
 Available commands are:
 
    install    [ -arch architecture ] [ packages... ]                                           -- builds packages and executables
-   test       [ -coverage ] [ -misspell ] [ packages... ]                                      -- runs the tests
+   test       [ -coverage ] [ packages... ]			                                           -- runs the tests
+   lint       													                               -- runs linters
    archive    [ -arch architecture ] [ -type zip|tar ] [ -signer key-envvar ] [ -upload dest ] -- archives build artefacts
    importkeys                                                                                  -- imports signing keys from env
    debsrc     [ -signer key-id ] [ -upload dest ]                                              -- creates a debian source package
@@ -56,8 +57,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
 	"github.com/ethereum/go-ethereum/internal/build"
+
 )
 
 var (
@@ -146,6 +147,8 @@ func main() {
 		doInstall(os.Args[2:])
 	case "test":
 		doTest(os.Args[2:])
+	case "lint":
+		doLint(os.Args[2:])
 	case "archive":
 		doArchive(os.Args[2:])
 	case "debsrc":
@@ -280,7 +283,6 @@ func goToolArch(arch string, subcmd string, args ...string) *exec.Cmd {
 
 func doTest(cmdline []string) {
 	var (
-		misspell = flag.Bool("misspell", false, "Whether to run the spell checker")
 		coverage = flag.Bool("coverage", false, "Whether to record code coverage")
 	)
 	flag.CommandLine.Parse(cmdline)
@@ -294,10 +296,7 @@ func doTest(cmdline []string) {
 
 	// Run analysis tools before the tests.
 	build.MustRun(goTool("vet", packages...))
-	if *misspell {
-		// TODO(karalabe): Reenable after false detection is fixed: https://github.com/client9/misspell/issues/105
-		// spellcheck(packages)
-	}
+
 	// Run the actual tests.
 	gotest := goTool("test", buildFlags(env)...)
 	// Test a single package at a time. CI builders are slow
@@ -306,36 +305,32 @@ func doTest(cmdline []string) {
 	if *coverage {
 		gotest.Args = append(gotest.Args, "-covermode=atomic", "-cover")
 	}
+
 	gotest.Args = append(gotest.Args, packages...)
 	build.MustRun(gotest)
 }
 
-// spellcheck runs the client9/misspell spellchecker package on all Go, Cgo and
-// test files in the requested packages.
-func spellcheck(packages []string) {
-	// Ensure the spellchecker is available
-	build.MustRun(goTool("get", "github.com/client9/misspell/cmd/misspell"))
+//runs gometalinter on requested packages
+// working through https://github.com/ethereum/go-ethereum/issues/15372
+func doLint(cmdline []string) {
+	flag.CommandLine.Parse(cmdline)
 
-	// Windows chokes on long argument lists, check packages individually
-	for _, pkg := range packages {
-		// The spell checker doesn't work on packages, gather all .go files for it
-		out, err := goTool("list", "-f", "{{.Dir}}{{range .GoFiles}}\n{{.}}{{end}}{{range .CgoFiles}}\n{{.}}{{end}}{{range .TestGoFiles}}\n{{.}}{{end}}", pkg).CombinedOutput()
-		if err != nil {
-			log.Fatalf("source file listing failed: %v\n%s", err, string(out))
-		}
-		// Retrieve the folder and assemble the source list
-		lines := strings.Split(string(out), "\n")
-		root := lines[0]
+	packages := []string{"./..."}
 
-		sources := make([]string, 0, len(lines)-1)
-		for _, line := range lines[1:] {
-			if line = strings.TrimSpace(line); line != "" {
-				sources = append(sources, filepath.Join(root, line))
-			}
-		}
-		// Run the spell checker for this particular package
-		build.MustRunCommand(filepath.Join(GOBIN, "misspell"), append([]string{"-error"}, sources...)...)
+	if len(flag.CommandLine.Args()) > 0 {
+		packages = flag.CommandLine.Args()
 	}
+	packages = build.ExpandPackagesNoVendor(packages)
+
+	//make gometalinter.v1 vaiable via the cli
+	build.MustRun(goTool("build", "gopkg.in/alecthomas/gometalinter.v1"))
+
+	//install the underlying linters
+	build.MustRunCommand("gometalinter.v1", "--install")
+
+	//run the linter on specified packages
+	build.MustRunCommand(filepath.Join(GOBIN,"gometalinter.v1"), append([]string{"--config=build/linter-config.json "}, packages...)...)
+	//build.MustRunCommand("gometalinter.v1", "--config=build/linter-config.json")
 }
 
 // Release Packaging
