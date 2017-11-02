@@ -310,27 +310,28 @@ func doTest(cmdline []string) {
 	build.MustRun(gotest)
 }
 
-//runs gometalinter on requested packages
-// working through https://github.com/ethereum/go-ethereum/issues/15372
+// runs gometalinter on requested packages
 func doLint(cmdline []string) {
+
 	flag.CommandLine.Parse(cmdline)
 
 	packages := []string{"./..."}
 
 	if len(flag.CommandLine.Args()) > 0 {
 		packages = flag.CommandLine.Args()
+		for _, pkg := range packages {
+			packages = append(packages, fmt.Sprintf("%s/...", pkg));
+		}
 	}
-	packages = build.ExpandPackagesNoVendor(packages)
 
-	//make gometalinter.v1 vaiable via the cli
-	build.MustRun(goTool("build", "gopkg.in/alecthomas/gometalinter.v1"))
 
-	//install the underlying linters
-	build.MustRunCommand("gometalinter.v1", "--install")
+	//get metalinter and install linters
+	build.MustRun(goTool("get", "gopkg.in/alecthomas/gometalinter.v1"))
+	build.MustRunCommand(filepath.Join(GOBIN,"gometalinter.v1"), "--install")
 
-	//run the linter on specified packages
-	build.MustRunCommand(filepath.Join(GOBIN,"gometalinter.v1"), append([]string{"--config=build/linter-config.json "}, packages...)...)
-	//build.MustRunCommand("gometalinter.v1", "--config=build/linter-config.json")
+	configs := []string{"--vendor", "--disable-all", "--enable=vet", "--enable=deadcode"} // Add additional linters to the slice with "--enable=linter-name"
+
+	build.MustRunCommand(filepath.Join(GOBIN,"gometalinter.v1"), append(configs, packages...)...)
 }
 
 // Release Packaging
